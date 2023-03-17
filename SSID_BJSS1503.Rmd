@@ -1,0 +1,325 @@
+---
+title: "Saccadic Suppression of Intersaccadic Displacement SSID"
+output:
+  html_document: 
+    code_folding: show
+  pdf_document: default
+date: '2023-03-17'
+---
+
+```{r setup, include=FALSE}
+#set working directory
+mainDir = '~/experiments_code/saccDisplacement/ssid_18012023' #change this to your local working directory 
+knitr::opts_knit$set(root.dir = mainDir)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+```{r Load libraries}
+#Load libraries
+library(ggplot2)
+library(data.table)
+library(tidyverse)
+library(plotly)
+library(factoextra)
+library(cluster)
+```
+
+```{r import data}
+###importing data
+load(file= 'joinedDF.RData')
+```
+This is data from an eye-tracking+behavioural experiment. During this experiment, participants were asked to follow a dot on the screen (make saccades/eye movements), while it moved twice (the first movement was big, the second was small). 
+These movements we call displacements and the movement could be along the vertical plane (up/down) or horizontal plane (left/right).This way, we can study displacement detection performance in four different visual fields (VPF's): left, right, upper and lower. Participants were instructed to judge the direction of the second displacement by pressing a key on the keyboard.
+
+I created this analysis script to separate the group of participants in groups, based on their response biases and to look whether there are differences in displacement detection performance across different visual fields (left/right/up/down). 
+
+The below code shows a hierarchical clustering method, which splits up the participants in 2 clusters, high bias (blue) versus low bias (beige). The number of 2 is chosen because the silhouette plot shows that this is the optimal amount of clusters for our data (see third plot)
+The subjects in blue show a very high bias, meaning that they show a consistent bias to say the displacement was in the direction of the first displacement (which was the big movement), regardless of the direction of the second displacement. A possible explanation could be that subjects with a high bias were not able to see the second displacement due to it being very small.  
+
+
+```{r clustering subjects based on their proportion of directional responses as a function of displacement}
+####Clustering Analysis"
+dataCluster <- c()
+assignK <- c()
+clustPerCon <- c()
+
+for ( i in unique( joinedDF$experiment ) ) {
+    dataToProcess <- subset( joinedDF, experiment== i)
+    dataToProcessAverage <- round( tapply( dataToProcess$respConsensus, list( dataToProcess$subject, dataToProcess$displacement ), mean ), 4 ) #take mean per subject per condition
+    dataLoopVPF <- rep( i, dim( dataToProcessAverage )[1] )
+    dataLoopSubject <- as.character( attr(dataToProcessAverage,'dimnames')[[1]] )
+    dataLoop <- data.frame( dataLoopVPF, dataLoopSubject, dataToProcessAverage[,c(1:4)], row.names=NULL, check.rows = FALSE )
+    names(dataLoop) <- c( 'experimentCondition', 'subject', '-1.7', '-0.5', '0.5', '1.7' )
+    matrixClusterInput <- as.matrix( dataLoop[,c(3:6)] )
+    #create dataframe to store silhouette coefficients per clusters per condition 
+    optimalK <- fviz_nbclust(matrixClusterInput, hcut, method = 'silhouette') 
+    clustPerCondf <- data.frame(condition = paste(i), kVals = optimalK$data$y, clusters = optimalK$data$clusters)
+    clustPerCon <- rbind(clustPerCon, clustPerCondf)
+    #clustering
+    distMat <- dist(matrixClusterInput, method='maximum') #returns distance matrix (computed by using algorithm 'maximum') to compute the distances between the rows (each row is one subject), aka distance between subject's scores
+    hClustOut <- hclust( distMat ) #hierarchical cluster
+    unsortedHclust <- cutree( hClustOut, 2 )# split in two clusters
+    #plot( hClustOut )
+    clusterAverages <- array(999, c(2) )
+    clusterAverages[1] <- mean( apply( matrixClusterInput[unsortedHclust==1,], 2, mean ) )
+    clusterAverages[2] <- mean( apply( matrixClusterInput[unsortedHclust==2,], 2, mean ) )
+    if ( clusterAverages[1] > clusterAverages[2] ) { #cluster 1 will always be larger than cluster 2, for left and right conditions, cluster 1 will have higher proportion of rightward responses, regardless of left/right condition; for upper and lower conditions, cluster 1 will have a higher proportion of upper responses
+      sortedHclust <- ifelse( unsortedHclust==1, 1, 2 )
+    }else{
+      sortedHclust <- ifelse( unsortedHclust==1, 2, 1 )
+    }
+    
+    jitteredValues <- jitter(c(-1.7,-0.5,0.5,1.7),0.4)
+    selectedCols <- c(adjustcolor('#00008B', alpha.f = 0.4), adjustcolor('#CD853F', alpha.f = 0.4))
+    plot( matrixClusterInput[1,] ~ jitteredValues, col=selectedCols[sortedHclust[1]], bty='n', las=1, xlim = c(-2,2), ylim=c(0,1), pch=16, cex=1, type='n', xlab=('displacement against (-) or along (+) direction of first movement'), ylab=('proportion of responses in direction of first movement'), cex.axis=1.2, cex.lab =1.2) 
+    title(main = substitute(paste('Clusters for ', i, ' condition'), list(i = i)), cex.main=1.5) 
+    for (k in 1:dim(matrixClusterInput)[1] ) {
+      jitteredValues <- jitter(c(-1.7,-0.5,0.5,1.7),0.4)
+      points( jitteredValues, matrixClusterInput[k,], col=selectedCols[sortedHclust[k]], pch=16, cex=1.5 )
+      lines( jitteredValues, matrixClusterInput[k,], col=selectedCols[sortedHclust[k]], pch=16, lwd=2 )
+      }
+    legend('topright', legend = unique(sortedHclust), col =selectedCols[factor(unique(sortedHclust))], pch = 16, cex = .8, box.col = "white")
+  
+    colkMeansOut <- data.frame(experimentCondition = dataLoopVPF, subject = dataLoop$subject, cluster = sortedHclust )
+    assignK <- rbind(assignK, colkMeansOut)
+    
+    dataCluster <- rbind( dataCluster, dataLoop  )
+  }
+
+clustPerCon$kVals <- round(as.numeric(clustPerCon$kVals),4)
+clustPerCon$clusters <- as.numeric(clustPerCon$clusters)
+
+#plot optimal clusters per condition + average  
+hor <- subset(clustPerCon, condition == 'horizontal')
+ver <- subset(clustPerCon, condition == 'vertical')
+plot(hor$kVals ~ jitter(hor$clusters,0.6), type= 'l', col= 'darksalmon', xlab = 'clusters', ylab = 'average silhouette width', bty='n', xlim = c(0,10), lwd=3)
+lines(ver$kVals, lwd = 3, col= 'palegoldenrod')
+legend('bottomright', legend = c('horizontal', 'vertical'), col =c('darksalmon','palegoldenrod') , pch = 16, cex =.6)
+#Silhouette coefficients near +1 indicate that the sample is far away from the neighboring clusters. A value of 0 indicates that the sample is on or very close to the decision boundary between two neighboring clusters
+
+#making clustering consistent
+assignK$newCluster <- ifelse(assignK$experimentCondition == 'vertical', assignK$cluster[assignK$experimentCondition == 'horizontal'], assignK$cluster)
+
+##implement clusters into main dataframe (joinedDF)
+assignKNew <- assignK %>%
+  mutate(experiment = experimentCondition, cluster = newCluster) %>%
+  select(-c(experimentCondition, newCluster))
+
+joinedDF <- merge(joinedDF, assignKNew)
+```
+A Generalized Linear Model (GLM) was used to analyze the group data. The proportion of responses in direction of the first displacement as a function of the second displacement direction and size (-1.7, -0.5, 0.5, 1.7) was tested using a logistic regression model for each visual field (left, right, upper, or lower). 
+From the output of this model, the bias and slope was extracted for each visual field. The first four plots show the performance of the biased cluster per Visual field and the  last four plots show the performance of the unbiased cluster per visual field. Looking at this, it is clear that the biased cluster was not able to do the task properly (they always say the second displacement was in direction of the first movement, regardless of the direction of the second displacement). Therefore we chose to continue the analysis without these 7 subjects.
+
+```{r fitting model to group averages}
+####GLM, logistic regression
+#loop per VPF
+outputdf<- data.frame()
+dataIn  <- list( dfAll = joinedDF, 
+                 resampleFlag = FALSE,
+                 plotFlag = TRUE )
+
+bootFun <- function( dataIn ) {
+  if ( dataIn$resampleFlag == FALSE ) { dataProc <- dataIn$dfAll }
+  if ( dataIn$resampleFlag == TRUE ) { 
+    participantsLabels <- unique( dataIn$dfAll$subject )
+    selectedParticipants <- sample( participantsLabels, length( participantsLabels ), replace=TRUE )
+    dataProc <- c()
+    for ( k in 1:length( participantsLabels ) ) {
+      dataProc <- rbind( dataProc, subset( dataIn$dfAll, subject==selectedParticipants[k] ) )
+    }
+    table( selectedParticipants )
+    sort( unique( dataProc$subject ) )
+  }
+  for (i in unique(dataProc$VPF)) {
+      #i = 'upper'
+      dataToFit <- subset( dataProc, VPF== i )
+      dataToFitAverage <- aggregate( respConsensus ~ displacement*subject, mean, data=dataToFit ) #take mean per subject per condition
+      modGlmB <- glm( respConsensus ~ displacement, family = quasibinomial(link = 'logit'), data=dataToFitAverage )
+      bias <- -1*coefficients( modGlmB )[1] / coefficients( modGlmB )[2] 
+      slope <- abs( coefficients( modGlmB )[2]/4 )
+      plotInterceptAverage <- 0.5 - bias*slope
+      newDf <- c()
+      newDf$displacement <- seq(-2,2,0.1)
+      fitLine <- predict( modGlmB, newdata = newDf, type='response' )
+      toReturn <- data.frame( i, as.numeric( round( c( bias ), 4 ) ), as.numeric( round( c( slope ), 4 ) ) )
+      names(toReturn) <- c( 'VPF', 'bias', 'slope' )
+      outputdf <- rbind( outputdf, toReturn )
+      
+            if ( dataIn$plotFlag== TRUE ) { 
+        plot( dataToFitAverage$respConsensus ~ jitter( dataToFitAverage$displacement, 0.5 ), bty='n', las=1, ylim=c(-0.25,1.25), xlim=c(-2,2), col=adjustcolor('#CCDECD', alpha.f = 0.7), pch=16, xlab=('displacement against (-) or along (+) direction of first movement'), ylab=('proportion of responses in direction of first movement'), cex = 1.5 )
+        lines( newDf$displacement, fitLine, lwd=3, lty=1, col='#446119' )
+        abline( h=0.5, lwd=1, lty=1, col='gray')
+        abline( v=0, lwd=1, lty=1, col='gray')
+        title(main=substitute(paste(i, ' visual field'), list(i = i)))
+        }
+    }
+  
+  return( outputdf  )
+}
+
+joinedDF_biased <- subset( joinedDF, cluster==1)
+dataIn  <- list( dfAll = joinedDF_biased, 
+                 resampleFlag = FALSE,
+                 plotFlag = TRUE )
+returnedParametersBiased <- bootFun( dataIn )
+returnedParametersBiased
+
+joinedDF_unbiased <- subset( joinedDF, cluster==2)
+dataIn  <- list( dfAll = joinedDF_unbiased, 
+                 resampleFlag = FALSE,
+                 plotFlag = TRUE )
+returnedParametersUnbiased <- bootFun( dataIn )
+returnedParametersUnbiased
+
+```
+Bootstrapping was performed on the group data of the unbiased cluster, and the confidence interval was compared between different visual field. This plot shows us that performance is better in the right/left visual field (movements in horizontal plane) compared to performance in the upper/lower visual field (movements in vertical plane). 
+
+```{r bootstrapping}
+####Bootstrapping
+outputdf<- data.frame()
+dataIn  <- list( dfAll = joinedDF_unbiased, 
+                 resampleFlag = TRUE,
+                 plotFlag = FALSE
+                                 )
+groupAvParameters <- bootFun( dataIn )
+groupAvParameters
+
+bootList <- t( replicate( 500, bootFun( dataIn ), simplify = FALSE ) )
+
+dfBootBias <- bootList[[1]][,c(1)]
+dfBootSlope <- bootList[[1]][,c(1)]
+for (k in 1:length( bootList ) ) {
+  dfBootBias <- cbind( dfBootBias, bootList[[k]][,2] )
+  dfBootSlope <- cbind( dfBootSlope, bootList[[k]][,3] )
+  names( dfBootBias ) <- c( 'VPF', as.character( seq( 1, k, 1 ) ) )
+  names( dfBootSlope ) <- c( 'VPF', as.character( seq( 1, k, 1 ) ) )
+}
+
+dfCIBias <- bootList[[1]][,c(1)]
+dfCISlope <- bootList[[1]][,c(1)]
+dfCIBias$minCI <- rep( 999, dim( dfBootBias )[ 1 ] )
+dfCIBias$maxCI <- rep( 999, dim( dfBootBias )[ 1 ] )
+dfCIBias$medCI <- rep( 999, dim( dfBootBias )[ 1 ] )
+dfCISlope$minCI <- rep( 999, dim( dfBootSlope )[ 1 ] )
+dfCISlope$maxCI <- rep( 999, dim( dfBootSlope )[ 1 ] )
+dfCISlope$medCI <- rep( 999, dim( dfBootSlope )[ 1 ] )
+
+##### calculating the 95% confidence interval after bootstrapping ####
+for (k in 1 : dim( dfBootSlope )[ 1 ] ) {
+  
+  storeQuantileTemp <- quantile( as.numeric( dfBootSlope[ k, c( 2 : dim( dfBootSlope )[ 2 ] ) ] ), probs=c( 0.025, 0.5, 0.975 ) )
+  storeQuantileTemp <- round( storeQuantileTemp, 4 ) 
+  dfCISlope$minCI[ k ] <- storeQuantileTemp[ 1 ] 
+  dfCISlope$maxCI[ k ] <- storeQuantileTemp[ 3 ] 
+  dfCISlope$medCI[ k ] <- storeQuantileTemp[ 2 ] 
+
+  storeQuantileTemp <- quantile( as.numeric( dfBootBias[ k, c( 2 : dim( dfBootBias )[ 2 ] ) ] ), probs=c( 0.025, 0.5, 0.975 ) )
+  storeQuantileTemp <- round( storeQuantileTemp, 4 ) 
+  dfCIBias$minCI[ k ] <- storeQuantileTemp[ 1 ] 
+  dfCIBias$maxCI[ k ] <- storeQuantileTemp[ 3 ] 
+  dfCIBias$medCI[ k ] <- storeQuantileTemp[ 2 ] 
+
+}
+
+#plotting confidence interval per viewingCondition and VPF 
+plot( 0, type='n', xlim=c( 0.5, 4.5 ), ylim=c( 0, .5 ), bty='n', las=1, axes=FALSE )
+points( c(1,2,3,4)-0.05, dfCISlope$medCI, col=c('red','darkorange','black','blue'), cex=2, pch=16 )
+segments( c(1,2,3,4)-0.05, dfCISlope$minCI, c(1,2,3,4)-0.05, dfCISlope$maxCI, col=c('red','darkorange','black','blue'), lwd=2 )
+axis( 1, c(1,2,3,4), c('right','left', 'upper','lower') )
+axis( 2, seq(0,5,0.25), seq(0,5,0.25), las=1 )
+
+```
+
+
+```{r Polar plots p correct across different visual fields}
+####Polar plot
+#per VPF
+perfPerVPF <- joinedDF %>%
+  subset(cluster == 2) %>%
+  group_by(subject, VPF, experiment) %>%
+  summarise(correct = mean(correct))
+
+nSubjects <- length( unique( perfPerVPF$subject ) )
+groupPerf <- aggregate( correct~VPF, mean, data=perfPerVPF )
+groupPerf$std <- aggregate( correct~VPF, sd, data=perfPerVPF )$correct
+groupPerf$se <- groupPerf$std / sqrt( nSubjects )
+#visual performance fields in degrees for the Polar Plots:
+groupPerf$degree <- ifelse(groupPerf$VPF== 'left', 180, groupPerf$VPF)
+groupPerf$degree <- ifelse(groupPerf$VPF== 'right', 0, groupPerf$degree)
+groupPerf$degree <- ifelse(groupPerf$VPF== 'upper', 90, groupPerf$degree)
+groupPerf$degree <- ifelse(groupPerf$VPF== 'lower', 270, groupPerf$degree)
+groupPerf$min <- groupPerf$correct - groupPerf$se
+groupPerf$max <- groupPerf$correct + groupPerf$se
+nDegrees = 4   
+
+p <- plot_ly(
+  type = 'scatterpolar',
+  mode = 'lines')
+for (i in 1:nDegrees) {
+p <- add_trace(p,
+         mode = 'line',
+         r=c( groupPerf$min[i], groupPerf$max[i] ), 
+         theta= c(groupPerf$degree[i], groupPerf$degree[i]), 
+         line = list(
+             color = 'orange'))
+}  
+p<- add_trace(p,
+     mode = 'lines+markers',
+     r = c(groupPerf$correct, groupPerf$correct[1]),
+     theta = c(groupPerf$degree, groupPerf$degree[1]),
+     #name = 'unbiased cluster',
+     line = list(
+       color = 'orange'),
+      marker = list(
+       color = 'orange',
+       size=8)
+   ) 
+p<- layout(p,
+    title = 'Performance unbiased cluster',
+    showlegend = F,
+    polar = list(
+      angularaxis = list(
+      nticks = 4,
+      tickwidth = 2,
+      linewidth = 2
+      ),
+      radialaxis = list(
+        angle = 90,
+        visible = T,
+        range = c(0.4,1),
+        linewidth = 1,
+        #tickwidth = 2,
+        showline = T,
+        #color = '#bfbfbf',
+        nticks = 8,
+        tickangle = 90
+        )
+    )
+)  
+    
+p
+
+```
+The polar plot shows the average performance per visual field. There are four dots, each dot representing the performance in a different visual field (left on the left, right on the right etc). This plot confirms what has been found after bootstrapping; performance on a displacement detection task is better during horizontal movements (left/right, average performance of .79 ), than during vertical movements (up/down, average performance of .73). The below paired t-test shows that this difference is significant (p=.01).
+```{r p-correct t-tests SACCADE condition}
+####t-tests for p correct horizontal vs vertical cond and lower versus upper VPF cond
+
+#hor and ver
+pCorrectHor <- perfPerVPF$correct[perfPerVPF$experiment== 'horizontal' ]
+pCorrectVer <- perfPerVPF$correct[perfPerVPF$experiment== 'vertical' ]
+#####subjects ##############
+subjHV<- perfPerVPF$subject[perfPerVPF$experiment== 'horizontal' ]
+
+#significance tests
+t.test( 
+  round( tapply( pCorrectHor , subjHV, mean ), 2 ),
+  round( tapply( pCorrectVer , subjHV, mean ), 2 ),
+  paired=TRUE,
+  ) 
+```
+
+
+
+
+
+
